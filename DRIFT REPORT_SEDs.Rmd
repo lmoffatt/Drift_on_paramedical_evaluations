@@ -1,0 +1,545 @@
+---
+title: "DRIFT on paramedical evaluations"
+author: "Luciano Moffatt"
+date: "19/5/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(tidyverse)
+library(rstan)
+options(mc.cores=parallel::detectCores());
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+
+# Project details
+
+
+
+In the domain of paramedicine students typically have their simulation scenarios evaluated by using a Global Rating Scale (GRS) that has been validated by Tavares and colleagues (Tavers et al., 2013). The GRS is a seven-dimension scale that is used to assess paramedic student’s competence as it pertains to: situational awareness, history gathering, patient assessment, decision making, resource utilization, communication, and procedural skills (Tavers et al., 2013). Each of the seven themes listed above are measured on a scale that ranges from 1 (unsafe) to 7 (exceptional) (Tavers et al., 2014). It has been established that the GRS is valid and possesses high inter-rater reliability when it is used to evaluate paramedics in training, additionally, there is evidence to suggest that values achieved on a GRS in simulation are transferable to values that are attained in a real clinical context (Tavers et al., 2014). 
+
+[comment]
+so, we have a human rating scale (1-7) where an instructor evaluates students competence on 7 dimensions.
+
+[\comment]
+
+
+Although the GRS has been proven to be the gold standard when it comes to paramedic student evaluation, to the best of knowledge, no one has explored the effects that differential rater function over time (DRIFT) has on the outcomes of the grades obtained on the GRS. The concept of DRIFT has been demonstrated in other areas of education and is typically a result in increasing leniency due to rater fatigue (McLaughlin et al., 2009). Fairness in assessment is crucial to education, additionally, in a domain such as paramedicine it is important that standardization occurs in evaluation as public health and safety could be compromised if this is not the case (Yeates et al., 2019). 
+
+[comment]
+so, the objective is to assertain if a differential rater function over time (DRIFT) exists
+so, if the rater changes its internal scale with the succesive evaluations. 
+of course any change can be attributed to the student too. 
+[\comment]
+
+
+
+As it is crucial for student success and public safety to ensure that evolutions of paramedic performance are accurate, the primary purpose of this study is to explore if rater fatigue contributes to DRIFT during multiple GRS evaluations for the GRS raters. 
+
+Methods 
+
+The research was approved by the Collège Boréal Research Ethics Board. Following ethical approval consent was acquired from participants post-practical examinations. This study examined rater evaluations during a practical paramedic student evaluation using the GRS that compromised ______stations lasting ___minutes. 
+The raters were all currently employed paramedics who were in possession of the Advanced Emergency Medical Care Assistant (AEMCA) qualification and legally allowed to work as a paramedic in the province of Ontario, Canada. Additionally, the raters were staff at Collège Boréal (Collège Boréal, Sudbury, Ontario, Canada). Each of the raters involved in the study were familiar with the GRS evaluation tool and had previously been involved in their evaluations before. The examinees were first- and second-year paramedic students that were enrolled in the college and were participating in the curriculum required practical assessments that take place three times per semester. 
+
+The student examinees were randomly assigned to start at a different station and moved through the GRS circuit in the same order. Each rater scored each paramedic student examinee at the same station and was given a single rest period during the practical examination that was staggered throughout. 
+
+In order to estimate the difficulty for each station we used the Prehospital Canadian Triage and Acuity Scale (CTAS) as outlined in the Paramedic Guide Version 2.0 that is published by the Emergency Health Services Branch from the Ministry of Health and Long-Term Care in Ontario, Canada. The CTAS scale is a 1-5 scale with level one being resuscitation, level two being emergent, level 3 urgent, level 4, less urgent, and level 5-non urgent. We presumed that the more urgent the situation the more complex the simulated scenario. 
+
+
+
+```{r warning=FALSE}
+
+db  <- read_excel("DRIFT REPORT Semster 1 and 2 _July 14 Luciano i.xlsx", 
+    col_types = c("text", "numeric", "numeric", 
+        "numeric", "numeric", "date", "text", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "numeric", "numeric", 
+        "numeric", "text", "numeric", "numeric", 
+        "numeric"), skip = 10)
+db%>%filter(!is.na(Student))->db2
+
+db2$Time=db2$Time*24
+
+colnames(db2)[1]<-"Evaluator"
+
+pivot_longer(db2,cols=c("ET","CD","EP","PD","UR","CM","DT"),names_to="scoreDim",values_to = "score")->d3
+
+d3%>%filter(!is.na(score))->d
+
+d$Time[d$Time<8]=d$Time[d$Time<8]+12
+
+d$h=floor(d$Time/2)*2
+
+
+
+
+```
+
+
+# Modelling the scores
+
+In order to analyze the possibility of a drift we first have to find an statistical model that describes the probability of a student to achieve a given score at a particular task. 
+
+A first approximation would be that the score correspond to the successful completion of 6 independent cumulative tasks, each one with the same probability of completion. 
+
+This is described by a Binomial distribution of Bi(6,p). 
+
+Alternatively, we can consider that not all the tasks have the same probability and that there are two or more kind of tasks, 
+$$ D=\sum_i Bi(n_i,p_i) \;\;\; while\; \sum_i n_i=6
+$$
+
+So, lets try both models
+```{stan output.var="themodel"}
+
+  // SECDY
+  functions {
+  // ... function declarations and definitions ...
+  
+  real apply_logit_drift(real logit_p, real alpha, real beta, int n)
+  {
+     real p=inv_logit(logit_p);
+     return logit((1-alpha*n/(1+alpha*n))*p+beta*n/(1+beta*n)*(1-p));
+  }
+  
+  // probability of detection of a gibbon at a distance d
+  // it does not count the zero distances, (as they are no detections)
+  }
+data {
+   real<lower=0, upper=1> beta; // for Evidence
+   int<lower=0> N; // number of measures
+   int<lower=0> nS; // number of Students
+   int<lower=0> nE; // number of Evaluators
+   int<lower=0> nDS; // number of dimensions of score
+   int<lower=0> nGS; // number of grades of score
+   int<lower=0> nCT; // number of Categories
+   
+     
+   // here I declare the data we use in the model
+   int  iStudent[N];
+   int  iEvaluator[N];
+   int  iCategory[N];
+   
+   int  iDimension[N];
+   
+   
+      
+   
+   int<lower=0> score[N];
+   vector[N] day;  // 0= first evaluation 1= last evaluation
+   vector[N] Time;
+   
+   vector[N] itestStudent;
+   int itestEvaluator[N];
+   
+   
+   
+   
+   
+   
+   // here I declare some parameters that I have to come up with to describe the 
+   // prior distribution of the fitted parameters. 
+   // I provide a mean and a standard deviation for each one of the three parameters we
+   // use: the variance of CL_v the CL_v for zero clearance and the slope
+   real  fp_mean_mean_logit_score_prior;
+   real <lower=0> fp_sd_mean_logit_score_prior;
+   
+   
+
+   
+   real  fp_mean_log_sd_student_logit_score_prior;
+   real <lower=0> fp_sd_log_sd_student_logit_score_prior;
+   
+   real  fp_mean_log_sd_evaluator_logit_score_prior;
+   real <lower=0> fp_sd_log_sd_evaluator_logit_score_prior;
+   
+   real  fp_mean_log_sd_category_logit_score_prior;
+   real <lower=0> fp_sd_log_sd_category_logit_score_prior;
+   
+   real  fp_mean_log_sd_dimension_logit_score_prior;
+   real <lower=0> fp_sd_log_sd_dimension_logit_score_prior;
+   
+   real  fp_mean__d_logit_score__d_day_prior;
+   real <lower=0> fp_sd_mean_d_logit_score__d_day_prior;
+   
+   real  fp_mean_log_sd__d_logit_score__d_day__prior;
+   real <lower=0> fp_sd_log_sd__d_logit_score__d_day__prior;
+  
+
+   real  fp_mean_logit_alpha_prior;
+   real <lower=0> fp_sd_mean_logit_alpha_prior;
+   
+   real  fp_mean_log_sd_logit_alpha_prior;
+   real <lower=0> fp_sd_log_sd_logit_alpha_prior;
+   
+
+   real  fp_mean_logit_beta_prior;
+   real <lower=0> fp_sd_mean_logit_beta_prior;
+     
+   real  fp_mean_log_sd_logit_beta_prior;
+   real <lower=0> fp_sd_log_sd_logit_beta_prior;
+   
+
+  // ... declarations ...
+}
+parameters {
+   // I had to do a little trick here, for some reason rstan works better if 
+   // we work with standarized parameters (that after we substract the mean and divide by
+   // the standard deviation). So the algorithm will work on this parameters: 
+   // the real ones are the transformed
+
+   real sn_mean_logit_score_prior;
+   
+   real sn_sd_log_sd_student_logit_score_prior;
+   
+   vector[nS] sn_student_logit_score_prior;
+  
+   real sn_sd_log_sd_evaluator_logit_score_prior;
+   
+   vector[nE] sn_evaluator_logit_score_prior;
+  
+  // real sn_sd_log_sd_category_logit_score_prior;
+   
+//   vector[nCT] sn_category_logit_score_prior;
+
+   real sn_sd_log_sd_dimension_logit_score_prior;
+   
+   vector[nS*nDS] sn_dimension_logit_score_prior;
+
+  // real sn_mean__d_logit_score__d_day_prior;
+
+//   real sn_log_sd__d_logit_score__d_day_prior;
+
+//   vector[nS] sn__d_logit_score__d_day__prior;
+
+
+ //  real sn_mean_logit_alpha_prior;
+
+//   real sn_log_sd_logit_alpha_prior;
+
+ //  vector[nE] sn_sd_logit_alpha_prior;
+
+//   real sn_mean_logit_beta_prior;
+
+//   real sn_log_sd_logit_beta_prior;
+
+//   vector[nE] sn_sd_logit_beta_prior;
+
+   // ... declarations ...
+}
+transformed parameters {
+   // ... declarations ... statements ...
+   // here I transform the standarize parameters to the regular ones.
+   
+   
+   
+   real mean_logit_score=sn_mean_logit_score_prior*
+   fp_sd_mean_logit_score_prior+fp_mean_mean_logit_score_prior;
+   
+   real sd_student_logit_score_prior=exp(sn_sd_log_sd_student_logit_score_prior*
+   fp_sd_log_sd_student_logit_score_prior+fp_mean_log_sd_student_logit_score_prior);
+   
+  real sd_evaluator_logit_score_prior=exp(sn_sd_log_sd_evaluator_logit_score_prior*
+   fp_sd_log_sd_evaluator_logit_score_prior+fp_mean_log_sd_evaluator_logit_score_prior);
+   
+ // real sd_category_logit_score_prior=exp(sn_sd_log_sd_category_logit_score_prior*
+//   fp_sd_log_sd_category_logit_score_prior+fp_mean_log_sd_category_logit_score_prior);
+
+  real sd_dimension_logit_score_prior=exp(sn_sd_log_sd_dimension_logit_score_prior*
+   fp_sd_log_sd_dimension_logit_score_prior+fp_mean_log_sd_dimension_logit_score_prior);
+
+
+ //  real mean_d_logit_score__d_day_prior=sn_mean__d_logit_score__d_day_prior*
+//   fp_sd_mean_d_logit_score__d_day_prior+fp_mean__d_logit_score__d_day_prior;
+  
+   
+  
+
+ //  real sd__d_logit_score__d_day__prior=exp(sn_log_sd__d_logit_score__d_day_prior*
+//   fp_sd_log_sd__d_logit_score__d_day__prior+fp_mean_log_sd__d_logit_score__d_day__prior);
+
+//   real mean_logit_alpha_prior=sn_mean_logit_alpha_prior*
+//   fp_sd_mean_logit_alpha_prior+fp_mean_logit_alpha_prior;
+  
+//   real sd_logit_alpha_prior=exp(sn_log_sd_logit_alpha_prior*
+//   fp_sd_log_sd_logit_alpha_prior+fp_mean_log_sd_logit_alpha_prior);
+  
+  
+ //  real mean_logit_beta_prior=sn_mean_logit_beta_prior*
+//   fp_sd_mean_logit_beta_prior+fp_mean_logit_beta_prior;
+
+//   real sd_logit_beta_prior=exp(sn_log_sd_logit_beta_prior*
+//   fp_sd_log_sd_logit_beta_prior+fp_mean_log_sd_logit_beta_prior);
+  
+   real mean_score=inv_logit(mean_logit_score);
+   
+ //  real mean_alpha_drift=inv_logit(mean_logit_alpha_prior);
+   
+//   real mean_beta_drift=inv_logit(mean_logit_beta_prior);
+   
+   
+   vector[nS] student_logit_score;
+   vector[nE] evaluator_logit_score;
+  // vector[nCT] category_logit_score;
+   matrix[nS,nDS] dimension_logit_score;
+ //  vector[nS] d_logit_score__d_day;
+ //  vector[nE] alpha_drift;
+   //vector[nE] beta_drift;
+   vector[N] logit_score;
+   
+   
+   for (i in 1:nS)
+      {
+        student_logit_score[i] = sn_student_logit_score_prior[i] *
+        sd_student_logit_score_prior;
+      }
+   for (i in 1:nE)
+      {
+        evaluator_logit_score[i] = sn_evaluator_logit_score_prior[i] *
+        sd_evaluator_logit_score_prior;
+      }
+//   for (i in 1:nCT)
+//      {
+//        category_logit_score[i] = sn_category_logit_score_prior[i] *
+//        sd_category_logit_score_prior;
+//      }
+   for (i in 1:nS)
+   {
+      for (j in 1:nDS)
+      {
+        dimension_logit_score[i,j] = sn_dimension_logit_score_prior[(i-1)*nDS+j] *
+        sd_dimension_logit_score_prior;
+      }
+   }
+//   for (i in 1:nS)
+ //     {
+//        d_logit_score__d_day[i] = sn__d_logit_score__d_day__prior[i] *
+ //       sd__d_logit_score__d_day__prior+mean_d_logit_score__d_day_prior;
+//      }
+//   for (i in 1:nE)
+//      {
+//        alpha_drift[i] = inv_logit(-sn_sd_logit_alpha_prior[i] *
+ //       sd_logit_alpha_prior+mean_logit_alpha_prior);
+//      }
+ //  for (i in 1:nE)
+//      {
+ //       beta_drift[i] = inv_logit(-sn_sd_logit_beta_prior[i] *
+//        sd_logit_beta_prior+mean_logit_beta_prior);
+ //     }
+   for (i in 1:N)
+   {
+     //real p=inv_logit(
+      logit_score[i]=evaluator_logit_score[iEvaluator[i]]+
+      student_logit_score[iStudent[i]]+
+  //    category_logit_score[iCategory[i]]+
+      dimension_logit_score[iStudent[i],iDimension[i]]+
+   //   day[i]*mean_d_logit_score__d_day_prior+
+      mean_logit_score;
+   //   int n=itestEvaluator[i]; 
+    //  logit_score[i]=logit((1-mean_alpha_drift*n/
+   //   (1+mean_alpha_drift*n))*p+
+   //   mean_beta_drift*n/
+   //   (1+mean_beta_drift*n)*(1-p));
+   }   
+   
+}
+model {
+    // in this block we set the distributions.
+    // I also hacked rstan to calculate the Evidence. This was what entertain me the last week. 
+    
+    // I define two variables: prior and loglikelihood
+   
+   real prior;
+   real loglikelihood;
+   
+   
+// in the prior I sum the prior distribution of the three working parameters, all normal
+   // distributions of the transformed parameters
+   prior=normal_lpdf(sn_mean_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_sd_log_sd_student_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_student_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_sd_log_sd_evaluator_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_evaluator_logit_score_prior|0,1);
+//   prior+=normal_lpdf(sn_sd_log_sd_category_logit_score_prior|0,1);
+//   prior+=normal_lpdf(sn_category_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_sd_log_sd_dimension_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_dimension_logit_score_prior|0,1);
+//   prior+=normal_lpdf(sn_mean__d_logit_score__d_day_prior|0,1);
+ //  prior+=normal_lpdf(sn_log_sd__d_logit_score__d_day_prior|0,1);
+//   prior+=normal_lpdf(sn__d_logit_score__d_day__prior|0,1);
+//   prior+=normal_lpdf(sn_mean_logit_alpha_prior|0,1);
+//   prior+=normal_lpdf(sn_log_sd_logit_alpha_prior|0,1);
+//   prior+=normal_lpdf(sn_sd_logit_alpha_prior|0,1);
+ //  prior+=normal_lpdf(sn_mean_logit_beta_prior|0,1);
+//   prior+=normal_lpdf(sn_log_sd_logit_beta_prior|0,1);
+//   prior+=normal_lpdf(sn_sd_logit_beta_prior|0,1);
+  
+ 
+   loglikelihood=binomial_logit_lpmf(score|nGS,logit_score);
+
+   
+   // this is the distribution that is sampled: it depends on the parameter beta
+   // we have to run this model for different values of beta from 0 to 1
+   
+   target+=prior+beta*loglikelihood;
+   // ... declarations ... statements ...
+}
+generated quantities {
+   // unfortunately I have to calculate again the prior and loglikelihood so rstan records its
+   // values. 
+   real prior; 
+   real loglikelihood; 
+   
+   
+   
+   prior=normal_lpdf(sn_mean_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_sd_log_sd_student_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_student_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_sd_log_sd_evaluator_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_evaluator_logit_score_prior|0,1);
+  // prior+=normal_lpdf(sn_sd_log_sd_category_logit_score_prior|0,1);
+  // prior+=normal_lpdf(sn_category_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_sd_log_sd_dimension_logit_score_prior|0,1);
+   prior+=normal_lpdf(sn_dimension_logit_score_prior|0,1);
+ //  prior+=normal_lpdf(sn_mean__d_logit_score__d_day_prior|0,1);
+ //  prior+=normal_lpdf(sn_log_sd__d_logit_score__d_day_prior|0,1);
+//   prior+=normal_lpdf(sn__d_logit_score__d_day__prior|0,1);
+//   prior+=normal_lpdf(sn_mean_logit_alpha_prior|0,1);
+//   prior+=normal_lpdf(sn_log_sd_logit_alpha_prior|0,1);
+ //  prior+=normal_lpdf(sn_sd_logit_alpha_prior|0,1);
+ //  prior+=normal_lpdf(sn_mean_logit_beta_prior|0,1);
+//   prior+=normal_lpdf(sn_log_sd_logit_beta_prior|0,1);
+//   prior+=normal_lpdf(sn_sd_logit_beta_prior|0,1);
+  
+   loglikelihood=binomial_logit_lpmf(score|nGS,logit_score);
+   
+   
+
+
+}
+
+
+
+```
+
+```{r}
+logit<-function(p){ log(p/(1-p))}
+invlogit<-function(a){ 1./(1.+exp(-a))}
+
+```
+
+
+
+
+Lets convert the data to stan format
+
+```{r}
+
+model2_parameters<-c("geometric_mean_site_density","geometric_sd_site_density","protected_factor","detectability_distance");
+
+model2_priors<-c("sn_mean_logit_score_prior","sn_sd_log_sd_student_logit_score_prior",
+                 "sn_student_logit_score_prior","sn_sd_log_sd_evaluator_logit_score_prior",
+                 "sn_evaluator_logit_score_prior");
+   
+data_to_stan<-function(d)
+{
+   list(
+   beta=1.0,
+   N=nrow(d),
+   nS=length(unique(d$Student)),
+   nE=length(unique(d$Evaluator)),
+   nDS=length(unique(d$scoreDim)),
+   nGS=max(d$score)-min(d$score),#; // number of grades of score
+   nCT=length(unique(d$CTAS)),#// number of Categories
+   iStudent=as.numeric(as.factor(d$Student)),
+   # iEvaluator=as.numeric(str_extract(d$Evaluator,"\\d+")),
+   iEvaluator=as.numeric(as.factor(d$Evaluator)),
+   iDimension=as.numeric(as.factor(d$scoreDim)),
+   iCategory=as.numeric(as.factor(d$CTAS)),
+   score=d$score-min(d$score),
+   day=(as.numeric(d$Date)-min(as.numeric(d$Date)))/(max(as.numeric(d$Date))-min(as.numeric(d$Date))),
+   Time=d$Time,
+   itestStudent=d$itestStudent,
+   itestEvaluator=d$itestEvaluator,
+   fp_mean_mean_logit_score_prior=0,
+   fp_sd_mean_logit_score_prior=logit(0.7),
+   fp_mean_log_sd_student_logit_score_prior=logit(0.6),
+   fp_sd_log_sd_student_logit_score_prior=log(2),
+   fp_mean_log_sd_evaluator_logit_score_prior=logit(0.6),
+   fp_sd_log_sd_evaluator_logit_score_prior=log(2),
+   fp_mean_log_sd_category_logit_score_prior=logit(0.6),
+   fp_sd_log_sd_category_logit_score_prior=log(2),
+   fp_mean_log_sd_dimension_logit_score_prior=logit(0.6),
+   fp_sd_log_sd_dimension_logit_score_prior=log(2),
+   fp_mean__d_logit_score__d_day_prior=0,
+   fp_sd_mean_d_logit_score__d_day_prior=logit(0.6),
+   fp_mean_log_sd__d_logit_score__d_day__prior=logit(0.6),
+   fp_sd_log_sd__d_logit_score__d_day__prior=log(2),
+   fp_mean_logit_alpha_prior=logit(1e-2),
+   fp_sd_mean_logit_alpha_prior=log(3),
+   fp_mean_log_sd_logit_alpha_prior=log(3),
+   fp_sd_log_sd_logit_alpha_prior=log(3),
+   fp_mean_logit_beta_prior=logit(1e-2),
+   fp_sd_mean_logit_beta_prior=log(3),
+   fp_mean_log_sd_logit_beta_prior=log(3),
+   fp_sd_log_sd_logit_beta_prior=log(3)
+   
+   )
+}
+```
+
+
+```{r}
+source("rstan_evidence_calculator.R");
+#rdata<-d%>%filter(Evaluator=="Evaluator 1")%>%data_to_stan();
+rdata<-d%>%data_to_stan();
+
+
+#beta= c(0,1e-6,3.3e-6,1e-5,3.3e-5,1e-4,3.3e-4,0.001,0.0018,0.0032,0.0056,0.01,0.018,0.032,0.056,0.1,0.18,0.32,0.56,1.0);
+beta= c(0,0.001,0.01,0.1,0.32,0.56,1.0);
+#beta= c(1.0);
+knitr::opts_chunk$set(echo = FALSE);
+
+r2<-runSampling(model=themodel,mydata=rdata,betavector = beta, betalabel="beta",iter=4000, thin=50);
+
+```
+```{r}
+
+summary(r2[[length(beta)]])->s2;
+s2$summary->ss2;
+ss2
+
+```
+
+Lets first calculate the evidence.
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE);
+E2<-Evidencerun(r2,beta);
+E2;
+```
+
+
+The evidence is then 
+```{r}
+E2$I$Ev 
+```
+
+
+
+
+
+
+
+
+
+
+
